@@ -31,6 +31,7 @@ When asked about a dungeon or a set of quests:
 4. **Never write "part 1 / part 2".** Use quest names.
 5. **Pick-up point, clearly marked:** NPC and location for every single quest and for the **first quest** of every chain.
 6. **Quest level next to every quest** (minimum level). Say when sources disagree or none gives one.
+   - **Shareable status next to every quest**: shareable, not shareable, or unknown. Warcraft Tavern's Forever dungeon quest guides list "Shareable: Yes/No" per quest; Method does not. Never guess; show "unknown" when no source says.
 7. **One overview map with every step in order**, plus a small map per chain. Pins numbered to the steps; a pin visited twice shows both numbers ("8·11").
 8. **A pick-up table:** quest, giver, location, route stop.
 9. Tag unverified, Classic-derived steps with "verify".
@@ -62,6 +63,7 @@ When asked about a dungeon or a set of quests:
 | `./bnet char [NAME] [SUB]` | Summary, or `equipment`, `statistics`, `specializations`, `professions`, `quests`, `quests/completed`, `appearance`, `titles` |
 | `./bnet protected [NAME]` | Gold, deaths, current zone, hearthstone |
 | `./bnet item ID [ID ...]` | One line per item: quality, ilvl, req level, slot, DPS, armor/block, stats, procs, class, binding |
+| `./bnet quest ID [ID ...]` | One line per quest: zone, type (Dungeon, Elite, …), XP, money, reputation. Quest IDs come from `./bnet char quests` |
 | `./bnet search --slot SHIELD --quality RARE --level 22-34 [--name TEXT]` | Search plus details per hit. Slots: `WEAPON`, `WEAPONMAINHAND`, `TWOHWEAPON`, `SHIELD`, … |
 | `./bnet raw PATH [--static] [key=value ...]` | Any endpoint as JSON |
 
@@ -106,6 +108,8 @@ Game data (app token, static namespace):
 
 - `GET /data/wow/item/{id}`: quality, item level, required level, slot, damage/speed/DPS, armor, block, stats, on-hit effects, class restriction, binding.
 - `GET /data/wow/search/item`: `inventory_type.type`, `quality.type`, `level=[a,b]`, `name.en_GB`, `orderby`, `_pageSize`, `_page`.
+- `GET /data/wow/quest/{id}`: title, zone (`area`), type, XP, money and reputation rewards. It does **not** list item rewards, quest level, minimum level or shareability; get those from guides.
+- Quest IDs: `/profile/wow/character/{slug}/quests` and `/quests/completed` include an `id` per quest.
 
 ### Gotchas
 

@@ -24,6 +24,7 @@ Logins last 24 hours; run `./bnet login` again when account commands report 401/
 ./bnet char [NAME] [equipment|statistics|specializations|professions|quests|quests/completed|appearance|titles]
 ./bnet protected [NAME]
 ./bnet item ID [ID ...]
+./bnet quest ID [ID ...]
 ./bnet search --slot SHIELD --quality RARE --level 22-34 [--name TEXT]
 ./bnet raw PATH [--static] [key=value ...]
 ```

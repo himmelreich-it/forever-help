@@ -7,6 +7,7 @@ Usage:
   bnet char [NAME] [SUB]             character data, e.g. bnet char equipment
   bnet protected [NAME]              gold, deaths, position, hearthstone
   bnet item ID [ID ...]              item details
+  bnet quest ID [ID ...]             quest XP, money, reputation (no item rewards)
   bnet search [--slot S] [--quality Q] [--level A-B] [--name TEXT]
   bnet raw PATH [--static] [key=value ...]   any endpoint; prints JSON
 NAME is the character slug (name-surname); defaults to BNET_MAIN.
@@ -196,7 +197,7 @@ def summarize(sub, d):
         qs = d.get("in_progress") or d.get("quests") or []
         print(f"{len(qs)} quests")
         for q in qs:
-            print(" ", q["name"])
+            print(f"  {q['id']:>6}  {q['name']}")
     elif sub == "specializations":
         for g in d.get("specialization_groups", []):
             for s in g["specializations"]:
@@ -277,6 +278,22 @@ def main():
         for i in rest:
             d = get(f"/data/wow/item/{i}", static=True)
             out(d) if as_json else print(item_line(d))
+    elif cmd == "quest":
+        if not rest:
+            sys.exit("Usage: bnet quest ID [ID ...]")
+        for i in rest:
+            d = get(f"/data/wow/quest/{i}", static=True)
+            if as_json:
+                out(d)
+                continue
+            r = d.get("rewards", {})
+            m = r.get("money", {}).get("value", 0)
+            bits = [d.get("title", "?"), name(d.get("area") or d.get("category") or {}) or "",
+                    name(d.get("type") or {}) or "", f"{r.get('experience', 0)} XP"]
+            if m:
+                bits.append(f"{m // 10000}g {m // 100 % 100}s {m % 100}c")
+            bits += [f"+{x['value']} {x['reward']['name']}" for x in r.get("reputations", [])]
+            print(f"{d.get('id', i)} | " + " | ".join(b for b in bits if b))
     elif cmd == "search":
         params, i = {"orderby": "level", "_pageSize": "100"}, 0
         flags = {"--slot": "inventory_type.type", "--quality": "quality.type", "--name": "name.en_GB"}
