@@ -1,0 +1,315 @@
+#!/usr/bin/env python3
+"""Battle.net API helper for WoW Forever. Standard library only.
+
+Usage:
+  bnet login                         log in (user token, scope wow.profile)
+  bnet chars                         list account characters
+  bnet char [NAME] [SUB]             character data, e.g. bnet char equipment
+  bnet protected [NAME]              gold, deaths, position, hearthstone
+  bnet item ID [ID ...]              item details
+  bnet search [--slot S] [--quality Q] [--level A-B] [--name TEXT]
+  bnet raw PATH [--static] [key=value ...]   any endpoint; prints JSON
+NAME is the character slug (name-surname); defaults to BNET_MAIN.
+Add --json to print raw JSON instead of a summary.
+
+Settings come from the environment or a .env file next to this script:
+BNET_CLIENT_ID, BNET_CLIENT_SECRET, BNET_REGION (default eu),
+BNET_LOCALE (default en_GB), BNET_MAIN (default character slug).
+With no secret set, requests go out without client auth (in the Claude cloud environment the proxy adds it).
+"""
+import base64, http.server, json, os, secrets, sys, time, urllib.error, urllib.parse, urllib.request, webbrowser
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CACHE = os.path.join(HERE, ".bnet-cache.json")
+OAUTH = "https://oauth.battle.net"
+# Region, locale and client ID come from the environment / .env (see .env.example).
+REGION = LOCALE = API = NS_PROFILE = NS_STATIC = None
+REDIRECT_PORT = 8765
+REDIRECT = f"http://localhost:{REDIRECT_PORT}/callback"
+
+
+def configure():
+    global REGION, LOCALE, API, NS_PROFILE, NS_STATIC
+    REGION = os.environ.get("BNET_REGION", "eu").lower()
+    LOCALE = os.environ.get("BNET_LOCALE", "en_GB")
+    API = f"https://{REGION}.api.blizzard.com"
+    NS_PROFILE = f"profile-forever-{REGION}"
+    NS_STATIC = f"static-forever-{REGION}"
+
+
+def char_name(rest, usage):
+    n = rest[0] if rest else os.environ.get("BNET_MAIN")
+    if not n:
+        sys.exit(usage + "  (or set BNET_MAIN in .env)")
+    return n.lower()
+
+
+def load_env():
+    path = os.path.join(HERE, ".env")
+    if os.path.exists(path):
+        for line in open(path):
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def cache_get(key):
+    try:
+        c = json.load(open(CACHE))
+    except (OSError, ValueError):
+        return None
+    t = c.get(key)
+    if t and t["expires_at"] > time.time() + 60:
+        return t["access_token"]
+    return None
+
+
+def cache_put(key, tok):
+    try:
+        c = json.load(open(CACHE))
+    except (OSError, ValueError):
+        c = {}
+    c[key] = {"access_token": tok["access_token"], "expires_at": time.time() + tok.get("expires_in", 0)}
+    fd = os.open(CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        json.dump(c, f)
+
+
+def token_request(data):
+    req = urllib.request.Request(OAUTH + "/token", data=urllib.parse.urlencode(data).encode(), method="POST")
+    cid, sec = os.environ.get("BNET_CLIENT_ID"), os.environ.get("BNET_CLIENT_SECRET")
+    if cid and sec:
+        req.add_header("Authorization", "Basic " + base64.b64encode(f"{cid}:{sec}".encode()).decode())
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return json.load(r)
+
+
+def app_token():
+    t = cache_get("app")
+    if not t:
+        tok = token_request({"grant_type": "client_credentials"})
+        cache_put("app", tok)
+        t = tok["access_token"]
+    return t
+
+
+def user_token():
+    t = cache_get("user")
+    if not t:
+        sys.exit("No valid user token. Run: bnet login")
+    return t
+
+
+def login():
+    cid = os.environ.get("BNET_CLIENT_ID") or sys.exit("Set BNET_CLIENT_ID in .env or the environment.")
+    state = secrets.token_hex(8)
+    redirect = os.environ.get("BNET_REDIRECT", REDIRECT)
+    url = OAUTH + "/authorize?" + urllib.parse.urlencode(
+        {"response_type": "code", "client_id": cid, "redirect_uri": redirect, "scope": "wow.profile", "state": state})
+    print("Log in here:\n" + url + "\n")
+    got = {}
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            got.update({k: v[0] for k, v in q.items()})
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.end_headers()
+            self.wfile.write("Received. Return to the terminal.".encode())
+
+        def log_message(self, *a):
+            pass
+
+    if redirect.startswith(f"http://localhost:{REDIRECT_PORT}"):
+        try:
+            srv = http.server.HTTPServer(("127.0.0.1", REDIRECT_PORT), H)
+            srv.timeout = 180
+            try:
+                webbrowser.open(url)
+            except Exception:
+                pass
+            print(f"Waiting up to 3 minutes for the redirect on port {REDIRECT_PORT}...")
+            srv.handle_request()
+            srv.server_close()
+        except OSError as e:
+            print(f"Could not listen on port {REDIRECT_PORT} ({e}).")
+    if "code" not in got:
+        pasted = input("Paste the full URL from the address bar after logging in: ").strip()
+        got = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query).items()}
+    if got.get("state") != state:
+        sys.exit("State mismatch; aborting. Start again with: bnet login")
+    if "code" not in got:
+        sys.exit("No code in the redirect: " + json.dumps(got))
+    tok = token_request({"grant_type": "authorization_code", "code": got["code"], "redirect_uri": redirect})
+    cache_put("user", tok)
+    print(f"Logged in. Token valid for {tok.get('expires_in', 0) // 3600} h.")
+
+
+def get(path, static=False, user=False, **params):
+    params.setdefault("namespace", NS_STATIC if static else NS_PROFILE)
+    params.setdefault("locale", LOCALE)
+    url = API + path + "?" + urllib.parse.urlencode(params, safe="[],")
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", "Bearer " + (user_token() if user else app_token()))
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"HTTP {e.code} for {path}" + (" (user token expired? run: bnet login)" if e.code in (401, 403) and user else ""))
+
+
+def name(x):
+    return x.get("name") if isinstance(x, dict) else x
+
+
+def item_line(d):
+    p = d.get("preview_item", {})
+    w = p.get("weapon", {})
+    bits = [d["name"], d["quality"]["name"], f"ilvl {d['level']}", f"req {d['required_level']}",
+            f"{d['inventory_type']['name']} {d['item_subclass']['name']}"]
+    if w:
+        bits.append(f"{w['damage']['display_string']}, {w['attack_speed']['display_string']}, {w['dps']['value']:.1f} dps")
+    if "armor" in p:
+        bits.append(p["armor"]["display"]["display_string"])
+    if "shield_block" in p:
+        sb = p["shield_block"]
+        bits.append(sb.get("display", sb).get("display_string", ""))
+    bits += [s["display"]["display_string"] for s in p.get("stats", []) if not s.get("is_negated")]
+    bits += [s["description"] for s in p.get("spells", []) if s.get("description")]
+    cls = p.get("requirements", {}).get("playable_classes", {}).get("display_string")
+    if cls:
+        bits.append(cls)
+    if p.get("binding"):
+        bits.append(p["binding"]["name"])
+    return f"{d['id']} | " + " | ".join(bits)
+
+
+def summarize(sub, d):
+    if sub == "equipment":
+        for i in d.get("equipped_items", []):
+            st = ", ".join(s["display"]["display_string"] for s in i.get("stats", []) if not s.get("is_negated"))
+            dur = i.get("durability", {}).get("display_string", "")
+            print(f"{i['slot']['name']:<10} {i['name']} ({i['quality']['name']}, ilvl {i['level']['value']}) {st} {dur}".rstrip())
+    elif sub in ("quests", "quests/completed"):
+        qs = d.get("in_progress") or d.get("quests") or []
+        print(f"{len(qs)} quests")
+        for q in qs:
+            print(" ", q["name"])
+    elif sub == "specializations":
+        for g in d.get("specialization_groups", []):
+            for s in g["specializations"]:
+                ts = ", ".join(f"{t['talent']['name']} {t['talent_rank']}" for t in s["talents"])
+                print(f"{s['specialization_name']} ({s.get('spent_points', 0)}): {ts}")
+    elif sub == "professions":
+        for k in ("primaries", "secondaries"):
+            for p in d.get(k, []):
+                for t in p["tiers"]:
+                    print(f"{t['tier']['name']}: {t['skill_points']}/{t['max_skill_points']}")
+    elif sub == "statistics":
+        for k, v in d.items():
+            if k in ("_links", "character"):
+                continue
+            if isinstance(v, dict):
+                v = v.get("effective", v.get("value", name(v)))
+            print(f"{k}: {v}")
+    elif sub == "":
+        for k in ("name", "surname", "level", "experience", "equipped_item_level", "last_login_timestamp"):
+            if k in d:
+                v = d[k]
+                if k == "last_login_timestamp":
+                    v = time.strftime("%Y-%m-%d %H:%M", time.localtime(v / 1000))
+                print(f"{k}: {v}")
+        for k in ("race", "character_class", "active_spec", "faction", "gender", "ruleset"):
+            if k in d:
+                print(f"{k}: {name(d[k])}")
+    else:
+        print(json.dumps(d, indent=1))
+
+
+def main():
+    load_env()
+    configure()
+    args = sys.argv[1:]
+    as_json = "--json" in args
+    args = [a for a in args if a != "--json"]
+    if not args or args[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    cmd, rest = args[0], args[1:]
+    out = lambda d: print(json.dumps(d, indent=1))
+    if cmd == "login":
+        login()
+    elif cmd == "chars":
+        d = get("/profile/user/wow", user=True)
+        if as_json:
+            return out(d)
+        for a in d.get("wow_accounts", []):
+            for c in a.get("characters", []):
+                slug = c["character"]["href"].split("/character/")[1].split("?")[0]
+                print(f"{c['name']:<12} {c['level']:>3} {name(c['playable_race'])} {name(c['playable_class'])} "
+                      f"{name(c['faction'])}  slug={slug}  protected={c['protected_character']['href'].split('protected-character/')[1].split('?')[0]}")
+    elif cmd == "char":
+        subs = ("equipment", "statistics", "specializations", "professions", "quests", "quests/completed", "appearance", "titles")
+        if rest and rest[0] in subs:
+            rest = [None] + rest
+        cname = char_name([r for r in rest[:1] if r], "Usage: bnet char [NAME] [SUB]")
+        sub = rest[1] if len(rest) > 1 else ""
+        d = get(f"/profile/wow/character/{cname}" + (f"/{sub}" if sub else ""), user=True)
+        out(d) if as_json else summarize(sub, d)
+    elif cmd == "protected":
+        cname = char_name(rest, "Usage: bnet protected [NAME]")
+        acct = get("/profile/user/wow", user=True)
+        href = next((c["protected_character"]["href"] for a in acct.get("wow_accounts", []) for c in a.get("characters", [])
+                     if c["character"]["href"].split("/character/")[1].split("?")[0] == cname), None)
+        if not href:
+            sys.exit("Character not found on this account: " + cname)
+        d = get(urllib.parse.urlparse(href).path, user=True)
+        if as_json:
+            return out(d)
+        m = d.get("money", 0)
+        print(f"money: {m // 10000}g {m // 100 % 100}s {m % 100}c")
+        print(f"deaths: {d.get('protected_stats', {}).get('total_number_deaths')}")
+        print(f"position: {name(d.get('position', {}).get('zone'))}")
+        print(f"hearthstone: {name(d.get('bind_position', {}).get('zone'))}")
+    elif cmd == "item":
+        for i in rest:
+            d = get(f"/data/wow/item/{i}", static=True)
+            out(d) if as_json else print(item_line(d))
+    elif cmd == "search":
+        params, i = {"orderby": "level", "_pageSize": "100"}, 0
+        flags = {"--slot": "inventory_type.type", "--quality": "quality.type", "--name": "name.en_GB"}
+        while i < len(rest):
+            f, v = rest[i], rest[i + 1] if i + 1 < len(rest) else sys.exit("Missing value for " + rest[i])
+            if f == "--level":
+                a, _, b = v.partition("-")
+                params["level"] = f"[{a},{b or a}]"
+            elif f in flags:
+                params[flags[f]] = v.upper() if f != "--name" else v
+            else:
+                sys.exit("Unknown option: " + f)
+            i += 2
+        ids, page = [], 1
+        while True:
+            d = get("/data/wow/search/item", static=True, _page=str(page), **params)
+            ids += [r["data"]["id"] for r in d.get("results", [])]
+            if page >= d.get("pageCount", 1):
+                break
+            page += 1
+        if as_json:
+            return out(ids)
+        for i in ids:
+            print(item_line(get(f"/data/wow/item/{i}", static=True)))
+    elif cmd == "raw":
+        if not rest:
+            sys.exit("Usage: bnet raw PATH [--static] [key=value ...]")
+        static = "--static" in rest
+        kv = dict(x.split("=", 1) for x in rest[1:] if "=" in x)
+        out(get(rest[0], static=static, user=not static and rest[0].startswith("/profile"), **kv))
+    else:
+        sys.exit("Unknown command. Run: bnet help")
+
+
+if __name__ == "__main__":
+    main()
