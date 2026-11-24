@@ -27,6 +27,7 @@ When asked about a dungeon or a set of quests:
 1. **Check the quest log and completed quests first** (`./bnet char quests`, `./bnet char quests/completed`) and tailor the guide: skip finished quests, use ones already in the log.
 2. **Weave in class quests** for the character's class, but first show the **rewards and whether they are worth it for the character's role and spec**, so the player can decide.
 3. **One section per chain.** Name each chain, list its quests in order, and say whether chains are independent of each other.
+   - **Label each chain by the effort outside the dungeon**, not by its quest count. A chain whose only outside steps are pick-up, a short delivery on the way, or the turn-in is an **in-dungeon chain, one trip**; say so in its label and summary. Reserve "multi-zone chain" for chains with real work elsewhere (other zones, other dungeons, escorts). Never make a two-quest dungeon chain look like legwork to do before the run.
 4. **Never write "part 1 / part 2".** Use quest names.
 5. **Pick-up point, clearly marked:** NPC and location for every single quest and for the **first quest** of every chain.
 6. **Quest level next to every quest** (minimum level). Say when sources disagree or none gives one.
