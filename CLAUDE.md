@@ -1,6 +1,27 @@
 # WoW Forever helper
 
-Instructions for Claude Code in this repo. Personal details (characters, spec plans, region, personal preferences) live in `CLAUDE.local.md` and `.env`, which are git-ignored. Read `CLAUDE.local.md` if it exists before answering any WoW question; if it doesn't, ask the player for their main character and its role, and offer to create it from `CLAUDE.local.md.example`.
+Instructions for Claude Code in this repo. Personal details (characters, spec plans, region, personal preferences) live in `CLAUDE.local.md` and `.env`, which are git-ignored. Read `CLAUDE.local.md` if it exists before answering any WoW question; if `.env` or `CLAUDE.local.md` is missing, run the first-run setup below.
+
+The player doesn't run anything themselves: you run `./bnet`, handle logins and do the research. The script exists for you.
+
+## First-run setup
+
+When the player says "set me up", or `.env` / `CLAUDE.local.md` is missing:
+
+1. Check the player has a Battle.net API client with redirect URI `http://localhost:8765/callback` (README step 1). If not, walk them through creating one.
+2. Create `.env` from `.env.example`. Ask for the client ID, region (eu/us/kr/tw) and main character slug, and fill them in.
+3. Ask the player to paste the **client secret into `.env` themselves** (`BNET_CLIENT_SECRET=`). Never ask for it in chat.
+4. Log in (see "Logging in" below), then run `./bnet chars` to confirm, and use it to correct the main slug if needed.
+5. Interview the player (main character's role, spec plan, talent path, alts, how they like answers) and write `CLAUDE.local.md` from `CLAUDE.local.md.example`. Show it to them before saving.
+
+## Logging in
+
+You handle logins. User tokens last 24 hours; any 401/403 on account data means it expired.
+
+1. Run `./bnet login` in the background. It prints a login link, tries to open the browser and waits up to 3 minutes for the redirect on port 8765.
+2. Give the player the link and ask them to log in. Nothing else is needed from them: the script catches the redirect itself.
+3. When the command finishes ("Logged in."), re-run what failed.
+4. Only if the redirect can't reach port 8765 (e.g. a cloud session, where the player's browser isn't on this machine), the command ends with "No redirect received". Ask the player to paste the full address-bar URL they landed on, then run `./bnet login --url '<that URL>'`. Codes expire within minutes, so do it right away.
 
 ## How to work
 
@@ -58,7 +79,7 @@ When asked about a dungeon or a set of quests:
 
 | Command | What it returns |
 |---|---|
-| `./bnet login` | Logs in (user token). Listens on port 8765 for the redirect; if nothing arrives in 3 minutes it asks the player to paste the URL. |
+| `./bnet login` | Logs in (user token). Run it in the background; see "Logging in". |
 | `./bnet chars` | All characters on the account, with slug and protected-character id |
 | `./bnet char [NAME] [SUB]` | Summary, or `equipment`, `statistics`, `specializations`, `professions`, `quests`, `quests/completed`, `appearance`, `titles` |
 | `./bnet protected [NAME]` | Gold, deaths, current zone, hearthstone |
@@ -67,7 +88,7 @@ When asked about a dungeon or a set of quests:
 | `./bnet search --slot SHIELD --quality RARE --level 22-34 [--name TEXT]` | Search plus details per hit. Slots: `WEAPON`, `WEAPONMAINHAND`, `TWOHWEAPON`, `SHIELD`, … |
 | `./bnet raw PATH [--static] [key=value ...]` | Any endpoint as JSON |
 
-Add `--json` to any command for raw JSON. A 401/403 on account data means the user token expired: ask the player to run `./bnet login` (it needs their browser). When you find a useful endpoint without a command, propose adding one.
+Add `--json` to any command for raw JSON. A 401/403 on account data means the user token expired: log in again yourself (see "Logging in"). When you find a useful endpoint without a command, propose adding one.
 
 ### Configuration
 

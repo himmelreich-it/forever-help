@@ -3,6 +3,7 @@
 
 Usage:
   bnet login                         log in (user token, scope wow.profile)
+  bnet login --url URL               finish a login from the pasted address-bar URL
   bnet chars                         list account characters
   bnet char [NAME] [SUB]             character data, e.g. bnet char equipment
   bnet protected [NAME]              gold, deaths, position, hearthstone
@@ -82,8 +83,12 @@ def token_request(data):
     cid, sec = os.environ.get("BNET_CLIENT_ID"), os.environ.get("BNET_CLIENT_SECRET")
     if cid and sec:
         req.add_header("Authorization", "Basic " + base64.b64encode(f"{cid}:{sec}".encode()).decode())
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"Token request failed: HTTP {e.code} {e.read().decode(errors='replace')[:200]}"
+                 " (expired or reused code? start again with: bnet login)")
 
 
 def app_token():
@@ -102,13 +107,42 @@ def user_token():
     return t
 
 
-def login():
+def _cache_rw(update=None):
+    try:
+        c = json.load(open(CACHE))
+    except (OSError, ValueError):
+        c = {}
+    if update is not None:
+        c.update(update)
+        fd = os.open(CACHE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(c, f)
+    return c
+
+
+def finish_login(got, state, redirect):
+    if got.get("state") != state:
+        sys.exit("State mismatch; aborting. Start again with: bnet login")
+    if "code" not in got:
+        sys.exit("No code in the redirect: " + json.dumps(got))
+    tok = token_request({"grant_type": "authorization_code", "code": got["code"], "redirect_uri": redirect})
+    cache_put("user", tok)
+    _cache_rw({"pending": None})
+    print(f"Logged in. Token valid for {tok.get('expires_in', 0) // 3600} h.")
+
+
+def login(pasted=None):
+    if pasted:
+        p = _cache_rw().get("pending") or sys.exit("No login in progress. Run: bnet login")
+        got = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query).items()}
+        return finish_login(got, p["state"], p["redirect"])
     cid = os.environ.get("BNET_CLIENT_ID") or sys.exit("Set BNET_CLIENT_ID in .env or the environment.")
     state = secrets.token_hex(8)
     redirect = os.environ.get("BNET_REDIRECT", REDIRECT)
+    _cache_rw({"pending": {"state": state, "redirect": redirect}})
     url = OAUTH + "/authorize?" + urllib.parse.urlencode(
         {"response_type": "code", "client_id": cid, "redirect_uri": redirect, "scope": "wow.profile", "state": state})
-    print("Log in here:\n" + url + "\n")
+    print("Log in here:\n" + url + "\n", flush=True)
     got = {}
 
     class H(http.server.BaseHTTPRequestHandler):
@@ -118,7 +152,7 @@ def login():
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write("Received. Return to the terminal.".encode())
+            self.wfile.write("Received. You can close this tab.".encode())
 
         def log_message(self, *a):
             pass
@@ -131,21 +165,14 @@ def login():
                 webbrowser.open(url)
             except Exception:
                 pass
-            print(f"Waiting up to 3 minutes for the redirect on port {REDIRECT_PORT}...")
+            print(f"Waiting up to 3 minutes for the redirect on port {REDIRECT_PORT}...", flush=True)
             srv.handle_request()
             srv.server_close()
         except OSError as e:
             print(f"Could not listen on port {REDIRECT_PORT} ({e}).")
     if "code" not in got:
-        pasted = input("Paste the full URL from the address bar after logging in: ").strip()
-        got = {k: v[0] for k, v in urllib.parse.parse_qs(urllib.parse.urlparse(pasted).query).items()}
-    if got.get("state") != state:
-        sys.exit("State mismatch; aborting. Start again with: bnet login")
-    if "code" not in got:
-        sys.exit("No code in the redirect: " + json.dumps(got))
-    tok = token_request({"grant_type": "authorization_code", "code": got["code"], "redirect_uri": redirect})
-    cache_put("user", tok)
-    print(f"Logged in. Token valid for {tok.get('expires_in', 0) // 3600} h.")
+        sys.exit("No redirect received. After logging in, run: bnet login --url '<full address-bar URL>'")
+    finish_login(got, state, redirect)
 
 
 def get(path, static=False, user=False, **params):
@@ -241,7 +268,7 @@ def main():
     cmd, rest = args[0], args[1:]
     out = lambda d: print(json.dumps(d, indent=1))
     if cmd == "login":
-        login()
+        login(rest[1] if len(rest) > 1 and rest[0] == "--url" else None)
     elif cmd == "chars":
         d = get("/profile/user/wow", user=True)
         if as_json:
